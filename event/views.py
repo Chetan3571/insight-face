@@ -1,10 +1,32 @@
 from django.http import JsonResponse
+from django.shortcuts import render
 from django.views.decorators.csrf import csrf_exempt
-from django.core.files.storage import default_storage
 from .models import Photo, Album
 from .face_utils import extract_embeddings, find_similar
-import numpy as np
 import tempfile, os
+
+
+def home(request):
+    """Small frontend for upload and face search."""
+    return render(request, 'event/index.html')
+
+
+def list_albums(request):
+    """GET: return available albums for the frontend selector."""
+    if request.method != 'GET':
+        return JsonResponse({'error': 'GET only'}, status=405)
+
+    albums = Album.objects.select_related('event').all().order_by('-id')
+    return JsonResponse({
+        'albums': [
+            {
+                'id': album.id,
+                'title': album.title,
+                'event': album.event.name,
+            }
+            for album in albums
+        ]
+    })
 
 
 @csrf_exempt
@@ -14,7 +36,7 @@ def upload_photo(request):
         return JsonResponse({'error': 'POST only'}, status=405)
 
     album_id = request.POST.get('album_id')
-    images = request.FILES.getlist('images')   # <-- getlist for multiple files
+    images = request.FILES.getlist('images')
 
     print('id',album_id)
     if not album_id or not images:
