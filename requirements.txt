@@ -19,6 +19,7 @@ Cython==3.2.4
 Django==6.0.3
 django-celery-beat==2.9.0
 django-timezone-field==7.2.1
+djangorestframework==3.17.1
 easydict==1.13
 filelock==3.29.0
 flatbuffers==25.12.19
