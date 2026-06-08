@@ -22,7 +22,6 @@ logger = logging.getLogger('event')
 
 
 class UploadPhotoAPIView(APIView):
-    """POST /api/upload/ — upload one photo to an album and extract face embeddings."""
 
     parser_classes = [MultiPartParser, FormParser]
 
@@ -70,7 +69,7 @@ class UploadPhotoAPIView(APIView):
                 status=status.HTTP_201_CREATED,
             )
         except Exception:
-            logger.exception('Upload failed after %.2fs', time.time() - start)
+            logger.error('Upload failed after %.2fs', time.time() - start)
             return Response(
                 {'error': 'Upload failed', 'detail': traceback.format_exc()},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
