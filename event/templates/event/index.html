@@ -344,7 +344,7 @@
             for (const file of files) {
                 const formData = new FormData();
                 formData.append('album_id', albumId);
-                formData.append('images', file);
+                formData.append('image', file);
 
                 try {
                     const res = await fetch('/api/upload/', {
