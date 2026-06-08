@@ -1,5 +1,8 @@
+import logging
 import os
 import tempfile
+import time
+import traceback
 
 from rest_framework import status
 from rest_framework.parsers import FormParser, MultiPartParser
@@ -15,6 +18,8 @@ from .serializers import (
     UploadPhotoSerializer,
 )
 
+logger = logging.getLogger('event')
+
 
 class UploadPhotoAPIView(APIView):
     """POST /api/upload/ — upload one photo to an album and extract face embeddings."""
@@ -22,35 +27,54 @@ class UploadPhotoAPIView(APIView):
     parser_classes = [MultiPartParser, FormParser]
 
     def post(self, request):
-        serializer = UploadPhotoSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-
-        album_id = serializer.validated_data['album_id']
-        image = serializer.validated_data['image']
+        start = time.time()
+        logger.info('Upload started')
 
         try:
-            album = Album.objects.get(id=album_id)
-        except Album.DoesNotExist:
+            serializer = UploadPhotoSerializer(data=request.data)
+            serializer.is_valid(raise_exception=True)
+
+            album_id = serializer.validated_data['album_id']
+            image = serializer.validated_data['image']
+            logger.info('Upload validated album_id=%s filename=%s size=%s', album_id, image.name, image.size)
+
+            try:
+                album = Album.objects.get(id=album_id)
+            except Album.DoesNotExist:
+                logger.warning('Album %s not found', album_id)
+                return Response(
+                    {'error': f'Album {album_id} not found'},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+            photo = Photo(album=album, image=image)
+            photo.save()
+            logger.info('Photo saved id=%s path=%s', photo.id, photo.image.path)
+
+            embeddings = extract_embeddings(photo.image.path)
+            logger.info('Embeddings extracted count=%s', len(embeddings))
+
+            photo.set_embeddings(embeddings)
+            photo.save()
+
+            elapsed = time.time() - start
+            logger.info('Upload completed id=%s in %.2fs', photo.id, elapsed)
+
+            response_data = {
+                'id': photo.id,
+                'filename': image.name,
+                'faces_found': len(embeddings),
+            }
             return Response(
-                {'error': f'Album {album_id} not found'},
-                status=status.HTTP_404_NOT_FOUND,
+                UploadPhotoResponseSerializer(response_data).data,
+                status=status.HTTP_201_CREATED,
             )
-
-        photo = Photo(album=album, image=image)
-        photo.save()
-        embeddings = extract_embeddings(photo.image.path)
-        photo.set_embeddings(embeddings)
-        photo.save()
-
-        response_data = {
-            'id': photo.id,
-            'filename': image.name,
-            'faces_found': len(embeddings),
-        }
-        return Response(
-            UploadPhotoResponseSerializer(response_data).data,
-            status=status.HTTP_201_CREATED,
-        )
+        except Exception:
+            logger.exception('Upload failed after %.2fs', time.time() - start)
+            return Response(
+                {'error': 'Upload failed', 'detail': traceback.format_exc()},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
 
 class SearchByFaceAPIView(APIView):
