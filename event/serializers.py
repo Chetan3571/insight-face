@@ -3,21 +3,17 @@ from rest_framework import serializers
 
 class UploadPhotoSerializer(serializers.Serializer):
     album_id = serializers.IntegerField()
+    image = serializers.ImageField()
 
 
 class SearchByFaceSerializer(serializers.Serializer):
     image = serializers.ImageField()
 
 
-class UploadedPhotoSerializer(serializers.Serializer):
+class UploadPhotoResponseSerializer(serializers.Serializer):
     id = serializers.IntegerField()
     filename = serializers.CharField()
     faces_found = serializers.IntegerField()
-
-
-class UploadPhotoResponseSerializer(serializers.Serializer):
-    uploaded = serializers.IntegerField()
-    photos = UploadedPhotoSerializer(many=True)
 
 
 class MatchedPhotoSerializer(serializers.Serializer):

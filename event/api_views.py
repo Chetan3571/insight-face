@@ -17,7 +17,7 @@ from .serializers import (
 
 
 class UploadPhotoAPIView(APIView):
-    """POST /api/upload/ — upload photos to an album and extract face embeddings."""
+    """POST /api/upload/ — upload one photo to an album and extract face embeddings."""
 
     parser_classes = [MultiPartParser, FormParser]
 
@@ -25,14 +25,9 @@ class UploadPhotoAPIView(APIView):
         serializer = UploadPhotoSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        images = request.FILES.getlist('images')
-        if not images:
-            return Response(
-                {'error': 'album_id and at least one image are required'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
         album_id = serializer.validated_data['album_id']
+        image = serializer.validated_data['image']
+
         try:
             album = Album.objects.get(id=album_id)
         except Album.DoesNotExist:
@@ -41,21 +36,17 @@ class UploadPhotoAPIView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        results = []
-        for image in images:
-            photo = Photo(album=album, image=image)
-            photo.save()
-            embeddings = extract_embeddings(photo.image.path)
-            photo.set_embeddings(embeddings)
-            photo.save()
+        photo = Photo(album=album, image=image)
+        photo.save()
+        embeddings = extract_embeddings(photo.image.path)
+        photo.set_embeddings(embeddings)
+        photo.save()
 
-            results.append({
-                'id': photo.id,
-                'filename': image.name,
-                'faces_found': len(embeddings),
-            })
-
-        response_data = {'uploaded': len(results), 'photos': results}
+        response_data = {
+            'id': photo.id,
+            'filename': image.name,
+            'faces_found': len(embeddings),
+        }
         return Response(
             UploadPhotoResponseSerializer(response_data).data,
             status=status.HTTP_201_CREATED,
