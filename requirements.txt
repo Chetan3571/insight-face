@@ -3,6 +3,7 @@ albumentations==2.0.8
 amqp==5.3.1
 annotated-types==0.7.0
 asgiref==3.11.1
+beautifulsoup4==4.14.3
 billiard==4.2.4
 celery==5.6.3
 certifi==2026.2.25
@@ -18,9 +19,12 @@ Cython==3.2.4
 Django==6.0.3
 django-celery-beat==2.9.0
 django-timezone-field==7.2.1
+djangorestframework==3.17.1
 easydict==1.13
+filelock==3.29.0
 flatbuffers==25.12.19
 fonttools==4.62.1
+gdown==6.1.0
 idna==3.11
 ImageIO==2.37.3
 insightface==0.7.3
@@ -46,6 +50,7 @@ psycopg==3.3.3
 pydantic==2.12.5
 pydantic_core==2.41.5
 pyparsing==3.3.2
+PySocks==1.7.1
 python-crontab==3.3.0
 python-dateutil==2.9.0.post0
 PyYAML==6.0.3
@@ -56,6 +61,7 @@ scikit-learn==1.8.0
 scipy==1.17.1
 simsimd==6.5.16
 six==1.17.0
+soupsieve==2.8.4
 sqlparse==0.5.5
 stringzilla==4.6.0
 sympy==1.14.0

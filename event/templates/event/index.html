@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Demo Snapdme Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 900px;
+            margin: 24px auto;
+            padding: 0 16px;
+            background: #f4f6f8;
+            color: #17202a;
+        }
+
+        .card {
+            background: #fff;
+            border-radius: 10px;
+            padding: 16px;
+            margin-bottom: 16px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+        }
+
+        h1, h2 {
+            margin-top: 0;
+        }
+
+        label {
+            font-weight: 600;
+            display: block;
+            margin-top: 10px;
+        }
+
+        input, select, button {
+            margin-top: 6px;
+            padding: 8px 10px;
+            font-size: 14px;
+            width: 100%;
+            box-sizing: border-box;
+        }
+
+        button {
+            margin-top: 12px;
+            background: #1f6feb;
+            color: #fff;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+
+        button:disabled {
+            background: #8fb2f0;
+            cursor: not-allowed;
+        }
+
+        .status {
+            margin-top: 10px;
+            font-size: 14px;
+        }
+
+        .progress-wrap {
+            margin-top: 10px;
+            background: #e9ecef;
+            border-radius: 6px;
+            overflow: hidden;
+            height: 14px;
+            display: none;
+        }
+
+        .progress-bar {
+            height: 100%;
+            width: 0;
+            background: #2ea043;
+            transition: width 0.2s ease;
+        }
+
+        .results {
+            margin-top: 12px;
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+            gap: 12px;
+        }
+
+        .thumb {
+            border: 1px solid #d0d7de;
+            border-radius: 8px;
+            overflow: hidden;
+            background: #fff;
+        }
+
+        .thumb img {
+            width: 100%;
+            display: block;
+            object-fit: cover;
+            height: 160px;
+        }
+
+        .thumb p {
+            margin: 8px;
+            font-size: 13px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Snapdme Demo Test For Image Upload</h1>
+
+    <div class="card">
+        <h2>Upload Photos</h2>
+        <form id="uploadForm">
+            <label for="album">Album</label>
+            <select id="album" required>
+                <option value="">Select an album</option>
+            </select>
+
+            <label for="images">Images (multiple)</label>
+            <input id="images" type="file" accept="image/*" multiple required>
+
+            <button id="uploadBtn" type="submit">Upload and Extract Faces</button>
+        </form>
+
+        <div id="uploadStatus" class="status"></div>
+        <div id="uploadProgressWrap" class="progress-wrap">
+            <div id="uploadProgressBar" class="progress-bar"></div>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Search by Face</h2>
+        
+        <div style="margin-bottom: 16px;">
+            <button id="modeToggle" type="button" style="width: auto; display: inline-block; margin-right: 8px;">📤 Upload Photo</button>
+            <span id="modeLabel" style="font-weight: 600; font-size: 14px;"></span>
+        </div>
+
+        <!-- Upload Mode -->
+        <form id="searchForm" style="display: block;">
+            <label for="queryImage">Query Image</label>
+            <input id="queryImage" type="file" accept="image/*" required>
+            <button id="searchBtn" type="submit">Scan Face</button>
+        </form>
+
+        <!-- Camera Mode -->
+        <div id="cameraMode" style="display: none;">
+            <label>Camera Feed</label>
+            <video id="cameraFeed" autoplay playsinline muted style="width: 100%; height: auto; max-height: 300px; background: #000; border-radius: 6px; margin-top: 6px;"></video>
+            <button id="captureBtn" type="button" style="margin-top: 12px;">📸 Capture Photo</button>
+            <button id="stopCameraBtn" type="button" style="background: #d1355b; margin-top: 6px; display: none;">Stop Camera</button>
+        </div>
+
+        <canvas id="captureCanvas" style="display: none;"></canvas>
+        <div id="searchStatus" class="status"></div>
+        <div id="searchResults" class="results"></div>
+    </div>
+
+    <script>
+        const albumSelect = document.getElementById('album');
+        const uploadForm = document.getElementById('uploadForm');
+        const uploadBtn = document.getElementById('uploadBtn');
+        const uploadStatus = document.getElementById('uploadStatus');
+        const uploadProgressWrap = document.getElementById('uploadProgressWrap');
+        const uploadProgressBar = document.getElementById('uploadProgressBar');
+        const searchForm = document.getElementById('searchForm');
+        const searchBtn = document.getElementById('searchBtn');
+        const searchStatus = document.getElementById('searchStatus');
+        const searchResults = document.getElementById('searchResults');
+
+        // Camera capture elements
+        const modeToggle = document.getElementById('modeToggle');
+        const modeLabel = document.getElementById('modeLabel');
+        const cameraMode = document.getElementById('cameraMode');
+        const cameraFeed = document.getElementById('cameraFeed');
+        const captureBtn = document.getElementById('captureBtn');
+        const stopCameraBtn = document.getElementById('stopCameraBtn');
+        const captureCanvas = document.getElementById('captureCanvas');
+
+        let currentMode = 'upload'; // 'upload' or 'camera'
+        let stream = null;
+
+        // Toggle between upload and camera modes
+        modeToggle.addEventListener('click', async () => {
+            if (currentMode === 'upload') {
+                currentMode = 'camera';
+                modeToggle.textContent = '📁 Upload Photo';
+                modeLabel.textContent = 'Camera Mode';
+                searchForm.style.display = 'none';
+                cameraMode.style.display = 'block';
+                
+                try {
+                    stream = await navigator.mediaDevices.getUserMedia({ 
+                        video: { facingMode: 'user' },
+                        audio: false
+                    });
+                    cameraFeed.srcObject = stream;
+                    
+                    // Wait for video to be ready
+                    cameraFeed.onloadedmetadata = () => {
+                        cameraFeed.play().catch(err => {
+                            searchStatus.textContent = `Could not play video: ${err.message}`;
+                        });
+                    };
+                    
+                    stopCameraBtn.style.display = 'block';
+                    searchStatus.textContent = 'Camera ready. Click Capture Photo when ready.';
+                } catch (err) {
+                    searchStatus.textContent = `Camera access denied: ${err.message}`;
+                    currentMode = 'upload';
+                    modeToggle.textContent = '📤 Upload Photo';
+                    modeLabel.textContent = '';
+                    searchForm.style.display = 'block';
+                    cameraMode.style.display = 'none';
+                }
+            } else {
+                currentMode = 'upload';
+                modeToggle.textContent = '📤 Upload Photo';
+                modeLabel.textContent = '';
+                searchForm.style.display = 'block';
+                cameraMode.style.display = 'none';
+                stopCamera();
+            }
+        });
+
+        function stopCamera() {
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+                stream = null;
+            }
+            stopCameraBtn.style.display = 'none';
+        }
+
+        stopCameraBtn.addEventListener('click', () => {
+            stopCamera();
+        });
+
+        // Capture photo from camera
+        captureBtn.addEventListener('click', () => {
+            if (!cameraFeed.srcObject) {
+                searchStatus.textContent = 'Camera not ready.';
+                return;
+            }
+
+            if (cameraFeed.videoWidth === 0 || cameraFeed.videoHeight === 0) {
+                searchStatus.textContent = 'Camera is still loading. Try again in a moment.';
+                return;
+            }
+
+            try {
+                const context = captureCanvas.getContext('2d');
+                captureCanvas.width = cameraFeed.videoWidth;
+                captureCanvas.height = cameraFeed.videoHeight;
+                context.drawImage(cameraFeed, 0, 0);
+
+                // Convert canvas to blob and perform search
+                captureCanvas.toBlob((blob) => {
+                    if (blob) {
+                        const file = new File([blob], 'captured.jpg', { type: 'image/jpeg' });
+                        performSearch(file);
+                    } else {
+                        searchStatus.textContent = 'Failed to capture image. Please try again.';
+                        captureBtn.disabled = false;
+                    }
+                }, 'image/jpeg', 0.95);
+            } catch (err) {
+                searchStatus.textContent = `Capture error: ${err.message}`;
+                captureBtn.disabled = false;
+            }
+        });
+
+        async function performSearch(file) {
+            searchBtn.disabled = true;
+            captureBtn.disabled = true;
+            searchStatus.textContent = 'Scanning face...';
+            searchResults.innerHTML = '';
+
+            const formData = new FormData();
+            formData.append('image', file);
+
+            try {
+                const res = await fetch('/api/search/', {
+                    method: 'POST',
+                    body: formData,
+                });
+                const data = await res.json();
+                if (!res.ok) {
+                    throw new Error(data.error || 'Search failed');
+                }
+
+                searchStatus.textContent = `Matched ${data.matched_count} photo(s).`;
+
+                for (const photo of data.matched_photos) {
+                    const card = document.createElement('div');
+                    card.className = 'thumb';
+                    card.innerHTML = `
+                        <img src="${photo.url}" alt="Matched photo ${photo.id}">
+                        <p>Photo #${photo.id}<br>Album: ${photo.album}</p>
+                    `;
+                    searchResults.appendChild(card);
+                }
+            } catch (err) {
+                searchStatus.textContent = err.message;
+            } finally {
+                searchBtn.disabled = false;
+                captureBtn.disabled = false;
+            }
+        }
+
+        async function fetchAlbums() {
+            const res = await fetch('/api/albums/');
+            const data = await res.json();
+            if (!res.ok) {
+                throw new Error(data.error || 'Failed to fetch albums');
+            }
+
+            for (const album of data.albums) {
+                const option = document.createElement('option');
+                option.value = album.id;
+                option.textContent = `${album.title} (Event: ${album.event})`;
+                albumSelect.appendChild(option);
+            }
+        }
+
+        function setUploadProgress(done, total) {
+            const pct = total === 0 ? 0 : Math.round((done / total) * 100);
+            uploadProgressBar.style.width = `${pct}%`;
+            uploadStatus.textContent = `Uploaded ${done}/${total}`;
+        }
+
+        uploadForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const albumId = albumSelect.value;
+            const files = document.getElementById('images').files;
+
+            if (!albumId || files.length === 0) {
+                uploadStatus.textContent = 'Please select album and images.';
+                return;
+            }
+
+            uploadBtn.disabled = true;
+            uploadProgressWrap.style.display = 'block';
+            uploadProgressBar.style.width = '0%';
+            setUploadProgress(0, files.length);
+
+            let success = 0;
+            for (const file of files) {
+                const formData = new FormData();
+                formData.append('album_id', albumId);
+                formData.append('image', file);
+
+                try {
+                    const res = await fetch('/api/upload/', {
+                        method: 'POST',
+                        body: formData,
+                    });
+                    const data = await res.json();
+                    if (!res.ok) {
+                        throw new Error(data.error || 'Upload failed');
+                    }
+                    success += 1;
+                    setUploadProgress(success, files.length);
+                } catch (err) {
+                    uploadStatus.textContent = `Stopped at ${success}/${files.length}: ${err.message}`;
+                    uploadBtn.disabled = false;
+                    return;
+                }
+            }
+
+            uploadStatus.textContent = `Done. Uploaded ${success}/${files.length}`;
+            uploadBtn.disabled = false;
+        });
+
+        searchForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const file = document.getElementById('queryImage').files[0];
+            if (!file) {
+                searchStatus.textContent = 'Please choose a query image.';
+                return;
+            }
+
+            performSearch(file);
+        });
+
+        fetchAlbums().catch((err) => {
+            uploadStatus.textContent = `Could not load albums: ${err.message}. Create albums in /admin/.`;
+        });
+    </script>
+</body>
+</html>

@@ -6,6 +6,7 @@ from .tasks import process_photo_embeddings
 import tempfile
 import os
 
+from .models import Album
 
 @csrf_exempt
 def upload_photo(request):
