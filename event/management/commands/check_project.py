@@ -278,16 +278,24 @@ class Command(BaseCommand):
             self._warn('worker reachable', str(exc))
 
     def _check_insightface(self):
-        self.stdout.write('\nInsightFace')
-        for pack in ('buffalo_l', 'adaface'):
-            model_dir = Path.home() / '.insightface' / 'models' / pack
-            if model_dir.exists() and any(model_dir.glob('*.onnx')):
-                self._pass(f'{pack} models on disk', str(model_dir))
+        self.stdout.write('\nAdaFace pipeline')
+        pack_dir = Path.home() / '.insightface' / 'models' / 'adaface'
+        required = (
+            'det_10g.onnx',
+            '2d106det.onnx',
+            'adaface_ir101_webface12m.onnx',
+        )
+        for name in required:
+            path = pack_dir / name
+            if path.exists() and path.stat().st_size > 100_000:
+                self._pass(name, str(path))
             else:
-                self._warn(f'{pack} models on disk', 'will download on first use')
+                self._warn(name, 'will download on first Celery task')
 
         try:
             from event import face_utils
-            self._pass('face_utils import', 'models loaded')
+            recog = face_utils.app.models.get('recognition')
+            model_name = getattr(recog, 'model_file', 'unknown')
+            self._pass('face_utils import', f'recognition: {model_name}')
         except Exception as exc:
             self._fail('face_utils import', str(exc))

@@ -3,6 +3,30 @@ from django.db import migrations, models
 from pgvector.django import VectorField, HnswIndex
 
 
+def _ensure_vector_extension(apps, schema_editor):
+    """Create pgvector if missing. On AWS RDS, master user must enable it first."""
+    with schema_editor.connection.cursor() as cursor:
+        cursor.execute("SELECT 1 FROM pg_extension WHERE extname = 'vector'")
+        if cursor.fetchone():
+            return
+        try:
+            cursor.execute('CREATE EXTENSION IF NOT EXISTS vector')
+        except Exception as exc:
+            if 'permission denied' in str(exc).lower() or 'rds_superuser' in str(exc).lower():
+                raise RuntimeError(
+                    'pgvector extension is not enabled on this database. '
+                    'Connect to RDS as the master user and run:\n'
+                    '  CREATE EXTENSION IF NOT EXISTS vector;\n'
+                    'Then run migrate again.'
+                ) from exc
+            raise
+
+
+def _drop_vector_extension(apps, schema_editor):
+    with schema_editor.connection.cursor() as cursor:
+        cursor.execute('DROP EXTENSION IF EXISTS vector')
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -10,11 +34,7 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        # Enable the pgvector extension (idempotent)
-        migrations.RunSQL(
-            sql='CREATE EXTENSION IF NOT EXISTS vector',
-            reverse_sql='DROP EXTENSION IF EXISTS vector',
-        ),
+        migrations.RunPython(_ensure_vector_extension, _drop_vector_extension),
 
         # Drop the old JSON-blob column
         migrations.RemoveField(

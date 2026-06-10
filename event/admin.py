@@ -56,6 +56,7 @@ class PhotoAdmin(admin.ModelAdmin):
     list_filter = ('processed', 'album__event', 'album')
     search_fields = ('id', 'album__title', 'image')
     inlines = (FaceEmbeddingInline,)
+    actions = ('reprocess_embeddings',)
 
     def get_queryset(self, request):
         return super().get_queryset(request).annotate(face_count=Count('face_embeddings'))
@@ -63,6 +64,27 @@ class PhotoAdmin(admin.ModelAdmin):
     @admin.display(description='Faces', ordering='face_count')
     def face_count(self, obj):
         return obj.face_count
+
+    def save_model(self, request, obj, form, change):
+        super().save_model(request, obj, form, change)
+        if not change or 'image' in form.changed_data:
+            from .tasks import process_photo_embeddings
+
+            obj.processed = False
+            obj.save(update_fields=['processed'])
+            process_photo_embeddings.delay(obj.id)
+
+    @admin.action(description='Reprocess face embeddings')
+    def reprocess_embeddings(self, request, queryset):
+        from .tasks import process_photo_embeddings
+
+        count = 0
+        for photo in queryset:
+            photo.processed = False
+            photo.save(update_fields=['processed'])
+            process_photo_embeddings.delay(photo.id)
+            count += 1
+        self.message_user(request, f'Queued embedding extraction for {count} photo(s).')
 
 
 @admin.register(FaceEmbedding)
