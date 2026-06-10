@@ -9,14 +9,13 @@ from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .face_utils import extract_embeddings, find_similar
 from .models import Album, Photo
 from .serializers import (
     SearchByFaceResponseSerializer,
     SearchByFaceSerializer,
-    UploadPhotoResponseSerializer,
     UploadPhotoSerializer,
 )
+from .tasks import process_photo_embeddings
 
 from django.http import JsonResponse
 from django.shortcuts import render
@@ -26,7 +25,6 @@ logger = logging.getLogger('event')
 
 
 class UploadPhotoAPIView(APIView):
-
     parser_classes = [MultiPartParser, FormParser]
 
     def post(self, request):
@@ -39,7 +37,10 @@ class UploadPhotoAPIView(APIView):
 
             album_id = serializer.validated_data['album_id']
             image = serializer.validated_data['image']
-            logger.info('Upload validated album_id=%s filename=%s size=%s', album_id, image.name, image.size)
+            logger.info(
+                'Upload validated album_id=%s filename=%s size=%s',
+                album_id, image.name, image.size,
+            )
 
             try:
                 album = Album.objects.get(id=album_id)
@@ -50,26 +51,17 @@ class UploadPhotoAPIView(APIView):
                     status=status.HTTP_404_NOT_FOUND,
                 )
 
-            photo = Photo(album=album, image=image)
-            photo.save()
-            logger.info('Photo saved id=%s path=%s', photo.id, photo.image.path)
+            photo = Photo.objects.create(album=album, image=image)
+            task = process_photo_embeddings.delay(photo.id)
+            logger.info('Photo saved id=%s, celery task=%s', photo.id, task.id)
 
-            embeddings = extract_embeddings(photo.image.path)
-            logger.info('Embeddings extracted count=%s', len(embeddings))
-
-            photo.set_embeddings(embeddings)
-            photo.save()
-
-            elapsed = time.time() - start
-            logger.info('Upload completed id=%s in %.2fs', photo.id, elapsed)
-
-            response_data = {
-                'id': photo.id,
-                'filename': image.name,
-                'faces_found': len(embeddings),
-            }
             return Response(
-                UploadPhotoResponseSerializer(response_data).data,
+                {
+                    'id': photo.id,
+                    'filename': image.name,
+                    'task_id': task.id,
+                    'status': 'processing',
+                },
                 status=status.HTTP_201_CREATED,
             )
         except Exception:
@@ -81,15 +73,16 @@ class UploadPhotoAPIView(APIView):
 
 
 class SearchByFaceAPIView(APIView):
-    """POST /api/search/ — find photos containing a face matching the query image."""
-
     parser_classes = [MultiPartParser, FormParser]
 
     def post(self, request):
+        from .face_utils import extract_embeddings, find_similar
+
         serializer = SearchByFaceSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
         query_image = serializer.validated_data['image']
+        event_id = request.data.get('event_id')
 
         with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp:
             for chunk in query_image.chunks():
@@ -104,10 +97,7 @@ class SearchByFaceAPIView(APIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            query_emb = embeddings[0]
-            all_photos = Photo.objects.exclude(face_embeddings='[]')
-            matched = find_similar(query_emb, all_photos)
-
+            matched = find_similar(embeddings[0], event_id=event_id)
             response_data = {
                 'matched_count': len(matched),
                 'matched_photos': [
