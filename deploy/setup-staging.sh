@@ -46,6 +46,9 @@ pip install -r requirements.txt
 echo "==> Django migrations"
 python manage.py migrate
 
+echo "==> Collecting static files into staticfiles/"
+python manage.py collectstatic --noinput
+
 echo "==> Supervisor"
 sudo cp deploy/supervisor/insight-face.conf /etc/supervisor/conf.d/
 sudo supervisorctl reread
@@ -61,6 +64,8 @@ sudo systemctl reload nginx
 
 echo ""
 echo "Done. Verify:"
+echo "  tail -f logs/django.log"
+echo "  curl -I http://newmodel.snapdme.com/static/admin/css/base.css"
 echo "  curl -I http://newmodel.snapdme.com/api/upload/"
 echo "  sudo supervisorctl status"
 echo "  $DOCKER ps"
