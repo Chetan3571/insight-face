@@ -18,6 +18,10 @@ from .serializers import (
     UploadPhotoSerializer,
 )
 
+from django.http import JsonResponse
+from django.shortcuts import render
+
+from .models import Album
 logger = logging.getLogger('event')
 
 
@@ -114,3 +118,24 @@ class SearchByFaceAPIView(APIView):
             return Response(SearchByFaceResponseSerializer(response_data).data)
         finally:
             os.unlink(tmp_path)
+
+
+def home(request):
+    return render(request, 'event/index.html')
+
+
+def list_albums(request):
+    if request.method != 'GET':
+        return JsonResponse({'error': 'GET only'}, status=405)
+
+    albums = Album.objects.select_related('event').all().order_by('-id')
+    return JsonResponse({
+        'albums': [
+            {
+                'id': album.id,
+                'title': album.title,
+                'event': album.event.name,
+            }
+            for album in albums
+        ]
+    })
