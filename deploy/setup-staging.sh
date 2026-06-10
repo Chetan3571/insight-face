@@ -16,26 +16,8 @@ set -a
 source .env
 set +a
 
-chmod +x "$DOCKER"
-
-echo "==> Starting PostgreSQL + Redis via Docker"
-$DOCKER up -d db redis
-
-echo "==> Waiting for database"
-for i in $(seq 1 30); do
-  if $DOCKER exec -T db pg_isready -U "$DB_USER" -d "$DB_NAME" >/dev/null 2>&1; then
-    break
-  fi
-  sleep 1
-done
-
-echo "==> Waiting for Redis"
-for i in $(seq 1 30); do
-  if $DOCKER exec -T redis redis-cli ping 2>/dev/null | grep -q PONG; then
-    break
-  fi
-  sleep 1
-done
+chmod +x deploy/wait-for-services.sh
+./deploy/wait-for-services.sh
 
 echo "==> Python venv + dependencies"
 python3 -m venv env

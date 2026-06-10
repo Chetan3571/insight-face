@@ -8,6 +8,7 @@ class UploadPhotoSerializer(serializers.Serializer):
 
 class SearchByFaceSerializer(serializers.Serializer):
     image = serializers.ImageField()
+    event_id = serializers.IntegerField(required=False, allow_null=True)
 
 
 class UploadPhotoResponseSerializer(serializers.Serializer):

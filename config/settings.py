@@ -48,6 +48,14 @@ else:
 
 ALLOWED_HOSTS = _env_list('DJANGO_ALLOWED_HOSTS', default=['*'])
 
+CSRF_TRUSTED_ORIGINS = _env_list('DJANGO_CSRF_TRUSTED_ORIGINS', default=[])
+
+DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# Behind nginx / HTTPS (Certbot)
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+USE_X_FORWARDED_HOST = True
+
 # Public API — no session auth (avoids CSRF token requirement on POST uploads)
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [],
@@ -83,12 +91,6 @@ MIDDLEWARE = [
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
-
-# CORS Settings for testing
-CORS_ALLOWED_ORIGINS = ['*']
-CORS_ALLOW_ALL_ORIGINS = True
-CORS_ALLOW_CREDENTIALS = True
-CORS_EXPOSE_HEADERS = '*'
 
 ROOT_URLCONF = 'config.urls'
 

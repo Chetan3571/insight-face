@@ -22,8 +22,7 @@ class CORSMiddleware:
         response.setdefault('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS')
         response.setdefault(
             'Access-Control-Allow-Headers',
-            'Content-Type, Authorization, X-Requested-With, X-CSRFToken'
+            'Content-Type, Authorization, X-Requested-With',
         )
-        response.setdefault('Access-Control-Allow-Credentials', 'true')
         response.setdefault('Access-Control-Expose-Headers', 'Content-Type, Authorization')
         return response
