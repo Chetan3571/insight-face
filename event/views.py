@@ -8,6 +8,10 @@ def home(request):
     return render(request, 'event/index.html')
 
 
+def health(request):
+    return JsonResponse({'status': 'ok'})
+
+
 def list_albums(request):
     albums = Album.objects.select_related('event').all()
     return JsonResponse({
