@@ -1,6 +1,8 @@
-env
-.idea
-.jpg
-.png
-.JPG
-media
+.env
+env/
+__pycache__/
+*.pyc
+.idea/
+media/
+staticfiles/
+db.sqlite3

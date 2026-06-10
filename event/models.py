@@ -1,5 +1,6 @@
 from django.db import models
-import json
+from pgvector.django import VectorField, HnswIndex
+
 
 class Event(models.Model):
     name = models.CharField(max_length=255)
@@ -21,14 +22,23 @@ class Album(models.Model):
 class Photo(models.Model):
     album = models.ForeignKey(Album, on_delete=models.CASCADE, related_name='photos')
     image = models.ImageField(upload_to='photos/')
-    # Stores list of face embeddings as JSON (one per detected face)
-    face_embeddings = models.TextField(blank=True, default='[]')
+    processed = models.BooleanField(default=False)
 
-    def get_embeddings(self):
-        return json.loads(self.face_embeddings)
+    def __str__(self):
+        return f'Photo {self.id} ({self.album})'
 
-    def set_embeddings(self, embeddings):
-        # embeddings: list of lists (each a 512-d float vector)
-        self.face_embeddings = json.dumps(
-            [e.tolist() if hasattr(e, 'tolist') else e for e in embeddings]
-        )
+
+class FaceEmbedding(models.Model):
+    photo = models.ForeignKey(Photo, on_delete=models.CASCADE, related_name='face_embeddings')
+    embedding = VectorField(dimensions=512)
+
+    class Meta:
+        indexes = [
+            HnswIndex(
+                fields=['embedding'],
+                name='face_emb_hnsw_idx',
+                m=16,
+                ef_construction=64,
+                opclasses=['vector_cosine_ops'],
+            )
+        ]
