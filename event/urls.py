@@ -1,7 +1,7 @@
 from django.urls import path
 
 from . import views
-from .api_views import SearchByFaceAPIView, UploadPhotoAPIView
+from .api_views import SearchByFaceAPIView, UploadPhotoAPIView, home, list_albums
 
 urlpatterns = [
     path('', views.home, name='home'),
