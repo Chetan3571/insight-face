@@ -48,6 +48,14 @@ else:
 
 ALLOWED_HOSTS = _env_list('DJANGO_ALLOWED_HOSTS', default=['*'])
 
+# Public API — no session auth (avoids CSRF token requirement on POST uploads)
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': [],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.AllowAny',
+    ],
+}
+
 
 # Application definition
 
