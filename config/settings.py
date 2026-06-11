@@ -10,6 +10,7 @@ from pathlib import Path
 
 from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
+from kombu import Queue
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / '.env')
@@ -180,6 +181,39 @@ CELERY_RESULT_BACKEND = 'django-db'
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_EXTENDED = True
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+
+# Parallel workers — each process loads AdaFace models; use 1 on CPU staging
+CELERY_WORKER_CONCURRENCY = int(_env('CELERY_WORKER_CONCURRENCY', '1'))
+CELERY_TASK_DEFAULT_QUEUE = 'default'
+CELERY_TASK_QUEUES = (
+    Queue('default'),
+    Queue('embeddings'),
+)
+CELERY_TASK_ROUTES = {
+    'event.tasks.process_photo_embeddings': {'queue': 'embeddings'},
+    'event.tasks.process_album_embeddings': {'queue': 'embeddings'},
+}
+
+# Redis cache (DB 1; Celery broker uses DB 0)
+CACHES = {
+    'default': {
+        'BACKEND': 'django_redis.cache.RedisCache',
+        'LOCATION': _env('REDIS_CACHE_URL', 'redis://localhost:6379/1'),
+        'OPTIONS': {
+            'CLIENT_CLASS': 'django_redis.client.DefaultClient',
+            # Redis down → cache miss, not a 500
+            'IGNORE_EXCEPTIONS': True,
+        },
+    }
+}
+
+# TTL for search-result cache entries (seconds)
+SEARCH_CACHE_TTL = int(_env('SEARCH_CACHE_TTL', '300'))
+
+# Number of photos forwarded to extract_embeddings_batch per GPU chunk
+ALBUM_PHOTO_BATCH_SIZE = int(_env('ALBUM_PHOTO_BATCH_SIZE', '8'))
+REC_BATCH_SIZE = int(_env('REC_BATCH_SIZE', '16'))
 
 # Logging — file + console on staging; console only when DEBUG=True (local)
 _LOG_FORMATTER = {

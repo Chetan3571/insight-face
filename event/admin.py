@@ -41,6 +41,7 @@ class AlbumAdmin(admin.ModelAdmin):
     list_display = ('title', 'event', 'photo_count')
     list_filter = ('event',)
     search_fields = ('title', 'event__name')
+    actions = ('process_embeddings_gpu_batch',)
 
     def get_queryset(self, request):
         return super().get_queryset(request).annotate(photo_count=Count('photos'))
@@ -48,6 +49,17 @@ class AlbumAdmin(admin.ModelAdmin):
     @admin.display(description='Photos', ordering='photo_count')
     def photo_count(self, obj):
         return obj.photo_count
+
+    @admin.action(description='Process embeddings (GPU batch)')
+    def process_embeddings_gpu_batch(self, request, queryset):
+        from .tasks import process_album_embeddings
+
+        for album in queryset:
+            process_album_embeddings.delay(album.id)
+        self.message_user(
+            request,
+            f'Queued GPU-batched embedding jobs for {queryset.count()} album(s).',
+        )
 
 
 @admin.register(Photo)

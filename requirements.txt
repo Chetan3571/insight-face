@@ -1,5 +1,6 @@
 pgvector>=0.3.6
 django-celery-results>=2.5.1
+django-redis>=5.0.0
 python-dotenv>=1.0.0
 gunicorn>=22.0.0
 albucore==0.0.24

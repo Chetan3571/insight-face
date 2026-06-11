@@ -41,6 +41,7 @@ class Command(BaseCommand):
         self._check_pgvector()
         self._check_migrations()
         self._check_redis()
+        self._check_redis_cache()
         self._check_media()
         if not self.skip_docker:
             self._check_docker()
@@ -204,6 +205,22 @@ class Command(BaseCommand):
                 self._fail('redis ping', 'no response')
         except Exception as exc:
             self._fail('redis ping', str(exc))
+
+    def _check_redis_cache(self):
+        self.stdout.write('\nRedis cache (search results)')
+        cache_url = getattr(settings, 'CACHES', {}).get('default', {}).get('LOCATION', '')
+        self._pass('cache URL', str(cache_url))
+
+        try:
+            from django.core.cache import cache
+
+            cache.set('_healthcheck', 'ok', 10)
+            if cache.get('_healthcheck') == 'ok':
+                self._pass('cache read/write')
+            else:
+                self._warn('cache read/write', 'miss — Redis DB 1 down or IGNORE_EXCEPTIONS')
+        except Exception as exc:
+            self._warn('cache read/write', str(exc))
 
     def _check_media(self):
         self.stdout.write('\nMedia storage')
