@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 from django.conf import settings
+from django.core.files.base import ContentFile
 from django.core.management import call_command
 from django.core.management.base import BaseCommand
 from django.db import connection
@@ -41,6 +42,7 @@ class Command(BaseCommand):
         self._check_pgvector()
         self._check_migrations()
         self._check_redis()
+        self._check_redis_cache()
         self._check_media()
         if not self.skip_docker:
             self._check_docker()
@@ -205,8 +207,37 @@ class Command(BaseCommand):
         except Exception as exc:
             self._fail('redis ping', str(exc))
 
+    def _check_redis_cache(self):
+        self.stdout.write('\nRedis cache (search results)')
+        cache_url = getattr(settings, 'CACHES', {}).get('default', {}).get('LOCATION', '')
+        self._pass('cache URL', str(cache_url))
+
+        try:
+            from django.core.cache import cache
+
+            cache.set('_healthcheck', 'ok', 10)
+            if cache.get('_healthcheck') == 'ok':
+                self._pass('cache read/write')
+            else:
+                self._warn('cache read/write', 'miss — Redis DB 1 down or IGNORE_EXCEPTIONS')
+        except Exception as exc:
+            self._warn('cache read/write', str(exc))
+
     def _check_media(self):
         self.stdout.write('\nMedia storage')
+        if getattr(settings, 'USE_R2_STORAGE', False):
+            from django.core.files.storage import default_storage
+
+            bucket = getattr(settings, 'AWS_STORAGE_BUCKET_NAME', '?')
+            test_name = '.write_test'
+            try:
+                default_storage.save(test_name, ContentFile(b'ok'))
+                default_storage.delete(test_name)
+                self._pass('R2 storage writable', bucket)
+            except Exception as exc:
+                self._fail('R2 storage writable', str(exc))
+            return
+
         media_root = Path(settings.MEDIA_ROOT)
         try:
             media_root.mkdir(parents=True, exist_ok=True)
@@ -278,16 +309,24 @@ class Command(BaseCommand):
             self._warn('worker reachable', str(exc))
 
     def _check_insightface(self):
-        self.stdout.write('\nInsightFace')
-        for pack in ('buffalo_l', 'adaface'):
-            model_dir = Path.home() / '.insightface' / 'models' / pack
-            if model_dir.exists() and any(model_dir.glob('*.onnx')):
-                self._pass(f'{pack} models on disk', str(model_dir))
+        self.stdout.write('\nAdaFace pipeline')
+        pack_dir = Path.home() / '.insightface' / 'models' / 'adaface'
+        required = (
+            'det_10g.onnx',
+            '2d106det.onnx',
+            'adaface_ir101_webface12m.onnx',
+        )
+        for name in required:
+            path = pack_dir / name
+            if path.exists() and path.stat().st_size > 100_000:
+                self._pass(name, str(path))
             else:
-                self._warn(f'{pack} models on disk', 'will download on first use')
+                self._warn(name, 'will download on first Celery task')
 
         try:
             from event import face_utils
-            self._pass('face_utils import', 'models loaded')
+            recog = face_utils.app.models.get('recognition')
+            model_name = getattr(recog, 'model_file', 'unknown')
+            self._pass('face_utils import', f'recognition: {model_name}')
         except Exception as exc:
             self._fail('face_utils import', str(exc))

@@ -1,10 +1,13 @@
+import hashlib
 import logging
 import os
 import tempfile
 import time
-import traceback
 
+from django.conf import settings
+from django.core.cache import cache
 from rest_framework import status
+from rest_framework.exceptions import ValidationError
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -17,10 +20,6 @@ from .serializers import (
 )
 from .tasks import process_photo_embeddings
 
-from django.http import JsonResponse
-from django.shortcuts import render
-
-from .models import Album
 logger = logging.getLogger('event')
 
 
@@ -64,10 +63,12 @@ class UploadPhotoAPIView(APIView):
                 },
                 status=status.HTTP_201_CREATED,
             )
+        except ValidationError as exc:
+            return Response(exc.detail, status=status.HTTP_400_BAD_REQUEST)
         except Exception:
-            logger.error('Upload failed after %.2fs', time.time() - start)
+            logger.exception('Upload failed after %.2fs', time.time() - start)
             return Response(
-                {'error': 'Upload failed', 'detail': traceback.format_exc()},
+                {'error': 'Upload failed'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
@@ -82,11 +83,20 @@ class SearchByFaceAPIView(APIView):
         serializer.is_valid(raise_exception=True)
 
         query_image = serializer.validated_data['image']
-        event_id = request.data.get('event_id')
+        event_id = serializer.validated_data.get('event_id')
+
+        query_image.seek(0)
+        image_bytes = query_image.read()
+        digest = hashlib.sha256(image_bytes).hexdigest()
+        cache_key = f'search:{digest}:{event_id or "all"}'
+
+        cached = cache.get(cache_key)
+        if cached is not None:
+            logger.info('Search cache hit key=%s', cache_key)
+            return Response(SearchByFaceResponseSerializer(cached).data)
 
         with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp:
-            for chunk in query_image.chunks():
-                tmp.write(chunk)
+            tmp.write(image_bytes)
             tmp_path = tmp.name
 
         try:
@@ -105,27 +115,34 @@ class SearchByFaceAPIView(APIView):
                     for p in matched
                 ],
             }
+
+            ttl = getattr(settings, 'SEARCH_CACHE_TTL', 300)
+            cache.set(cache_key, response_data, ttl)
+
             return Response(SearchByFaceResponseSerializer(response_data).data)
+        except Exception:
+            logger.exception('Face search failed')
+            return Response(
+                {'error': 'Face search failed'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
         finally:
             os.unlink(tmp_path)
 
 
-def home(request):
-    return render(request, 'event/index.html')
+class TaskStatusAPIView(APIView):
+    def get(self, request, task_id):
+        from django_celery_results.models import TaskResult
 
-
-def list_albums(request):
-    if request.method != 'GET':
-        return JsonResponse({'error': 'GET only'}, status=405)
-
-    albums = Album.objects.select_related('event').all().order_by('-id')
-    return JsonResponse({
-        'albums': [
-            {
-                'id': album.id,
-                'title': album.title,
-                'event': album.event.name,
-            }
-            for album in albums
-        ]
-    })
+        try:
+            result = TaskResult.objects.get(task_id=task_id)
+            return Response({
+                'task_id': task_id,
+                'status': result.status,
+                'result': result.result,
+            })
+        except TaskResult.DoesNotExist:
+            return Response({
+                'task_id': task_id,
+                'status': 'PENDING',
+            })
