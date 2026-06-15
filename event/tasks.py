@@ -36,7 +36,10 @@ def process_photo_embeddings(self, photo_id):
         return {'photo_id': photo_id, 'error': 'photo not found'}
 
     try:
-        batch = extract_embeddings_batch([photo.image.path])
+        from .storage_utils import local_image_paths
+
+        with local_image_paths([photo.image]) as paths:
+            batch = extract_embeddings_batch(paths)
         embeddings = batch[0] if batch else []
         faces_found = _save_photo_embeddings(photo, embeddings)
         invalidate_search_cache()
@@ -70,18 +73,19 @@ def process_album_embeddings(album_id):
 
     for i in range(0, len(photos), batch_size):
         chunk = photos[i:i + batch_size]
-        paths = [p.image.path for p in chunk]
+        from .storage_utils import local_image_paths
 
-        try:
-            batch_results = extract_embeddings_batch(paths)
-        except Exception:
-            logger.exception(
-                'Batch failed for album %s chunk at index %s — falling back to per-photo tasks',
-                album_id, i,
-            )
-            for p in chunk:
-                process_photo_embeddings.delay(p.id)
-            continue
+        with local_image_paths([p.image for p in chunk]) as paths:
+            try:
+                batch_results = extract_embeddings_batch(paths)
+            except Exception:
+                logger.exception(
+                    'Batch failed for album %s chunk at index %s — falling back to per-photo tasks',
+                    album_id, i,
+                )
+                for p in chunk:
+                    process_photo_embeddings.delay(p.id)
+                continue
 
         for photo, embeddings in zip(chunk, batch_results):
             _save_photo_embeddings(photo, embeddings)
