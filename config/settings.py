@@ -205,7 +205,7 @@ if USE_R2_STORAGE:
 
     STORAGES = {
         'default': {
-            'BACKEND': 'storages.backends.s3.S3Storage',
+            'BACKEND': 'event.storage.R2MediaStorage',
         },
         'staticfiles': {
             'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage',
