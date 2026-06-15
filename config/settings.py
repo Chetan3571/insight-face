@@ -10,6 +10,7 @@ from pathlib import Path
 
 from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
+from kombu import Queue
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / '.env')
@@ -170,6 +171,47 @@ STATIC_ROOT = BASE_DIR / 'staticfiles'
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
+# Media storage — local filesystem by default; Cloudflare R2 when USE_R2_STORAGE=True
+USE_R2_STORAGE = _env_bool('USE_R2_STORAGE', default=False)
+
+if USE_R2_STORAGE:
+    _r2_access_key = _env('R2_ACCESS_KEY_ID')
+    _r2_secret_key = _env('R2_SECRET_ACCESS_KEY')
+    _r2_bucket = _env('R2_BUCKET_NAME')
+    _r2_account_id = _env('R2_ACCOUNT_ID')
+    _r2_endpoint = _env('R2_ENDPOINT_URL') or (
+        f'https://{_r2_account_id}.r2.cloudflarestorage.com' if _r2_account_id else None
+    )
+    _r2_media_url = _env('R2_MEDIA_URL')
+
+    if not all([_r2_access_key, _r2_secret_key, _r2_bucket, _r2_endpoint, _r2_media_url]):
+        raise ImproperlyConfigured(
+            'USE_R2_STORAGE=True but one or more required vars are missing: '
+            'R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME, '
+            'R2_ENDPOINT_URL (or R2_ACCOUNT_ID), R2_MEDIA_URL'
+        )
+
+    AWS_ACCESS_KEY_ID = _r2_access_key
+    AWS_SECRET_ACCESS_KEY = _r2_secret_key
+    AWS_STORAGE_BUCKET_NAME = _r2_bucket
+    AWS_S3_ENDPOINT_URL = _r2_endpoint
+    AWS_S3_REGION_NAME = _env('R2_REGION_NAME', 'auto')
+    AWS_S3_SIGNATURE_VERSION = 's3v4'
+    AWS_DEFAULT_ACL = None
+    AWS_QUERYSTRING_AUTH = _env_bool('R2_QUERYSTRING_AUTH', default=False)
+    AWS_S3_FILE_OVERWRITE = False
+
+    MEDIA_URL = _r2_media_url if _r2_media_url.endswith('/') else f'{_r2_media_url}/'
+
+    STORAGES = {
+        'default': {
+            'BACKEND': 'storages.backends.s3.S3Storage',
+        },
+        'staticfiles': {
+            'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage',
+        },
+    }
+
 DATA_UPLOAD_MAX_MEMORY_SIZE = 104857600   # 100 MB
 FILE_UPLOAD_MAX_MEMORY_SIZE = 104857600  # 100 MB
 
@@ -180,6 +222,39 @@ CELERY_RESULT_BACKEND = 'django-db'
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_EXTENDED = True
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+
+# Parallel workers — each process loads AdaFace models; use 1 on CPU staging
+CELERY_WORKER_CONCURRENCY = int(_env('CELERY_WORKER_CONCURRENCY', '1'))
+CELERY_TASK_DEFAULT_QUEUE = 'default'
+CELERY_TASK_QUEUES = (
+    Queue('default'),
+    Queue('embeddings'),
+)
+CELERY_TASK_ROUTES = {
+    'event.tasks.process_photo_embeddings': {'queue': 'embeddings'},
+    'event.tasks.process_album_embeddings': {'queue': 'embeddings'},
+}
+
+# Redis cache (DB 1; Celery broker uses DB 0)
+CACHES = {
+    'default': {
+        'BACKEND': 'django_redis.cache.RedisCache',
+        'LOCATION': _env('REDIS_CACHE_URL', 'redis://localhost:6379/1'),
+        'OPTIONS': {
+            'CLIENT_CLASS': 'django_redis.client.DefaultClient',
+            # Redis down → cache miss, not a 500
+            'IGNORE_EXCEPTIONS': True,
+        },
+    }
+}
+
+# TTL for search-result cache entries (seconds)
+SEARCH_CACHE_TTL = int(_env('SEARCH_CACHE_TTL', '300'))
+
+# Number of photos forwarded to extract_embeddings_batch per GPU chunk
+ALBUM_PHOTO_BATCH_SIZE = int(_env('ALBUM_PHOTO_BATCH_SIZE', '8'))
+REC_BATCH_SIZE = int(_env('REC_BATCH_SIZE', '16'))
 
 # Logging — file + console on staging; console only when DEBUG=True (local)
 _LOG_FORMATTER = {

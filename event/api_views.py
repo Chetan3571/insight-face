@@ -1,8 +1,11 @@
+import hashlib
 import logging
 import os
 import tempfile
 import time
 
+from django.conf import settings
+from django.core.cache import cache
 from rest_framework import status
 from rest_framework.exceptions import ValidationError
 from rest_framework.parsers import FormParser, MultiPartParser
@@ -82,9 +85,18 @@ class SearchByFaceAPIView(APIView):
         query_image = serializer.validated_data['image']
         event_id = serializer.validated_data.get('event_id')
 
+        query_image.seek(0)
+        image_bytes = query_image.read()
+        digest = hashlib.sha256(image_bytes).hexdigest()
+        cache_key = f'search:{digest}:{event_id or "all"}'
+
+        cached = cache.get(cache_key)
+        if cached is not None:
+            logger.info('Search cache hit key=%s', cache_key)
+            return Response(SearchByFaceResponseSerializer(cached).data)
+
         with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp:
-            for chunk in query_image.chunks():
-                tmp.write(chunk)
+            tmp.write(image_bytes)
             tmp_path = tmp.name
 
         try:
@@ -103,6 +115,10 @@ class SearchByFaceAPIView(APIView):
                     for p in matched
                 ],
             }
+
+            ttl = getattr(settings, 'SEARCH_CACHE_TTL', 300)
+            cache.set(cache_key, response_data, ttl)
+
             return Response(SearchByFaceResponseSerializer(response_data).data)
         except Exception:
             logger.exception('Face search failed')

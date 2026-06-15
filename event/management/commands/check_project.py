@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 from django.conf import settings
+from django.core.files.base import ContentFile
 from django.core.management import call_command
 from django.core.management.base import BaseCommand
 from django.db import connection
@@ -41,6 +42,7 @@ class Command(BaseCommand):
         self._check_pgvector()
         self._check_migrations()
         self._check_redis()
+        self._check_redis_cache()
         self._check_media()
         if not self.skip_docker:
             self._check_docker()
@@ -205,8 +207,37 @@ class Command(BaseCommand):
         except Exception as exc:
             self._fail('redis ping', str(exc))
 
+    def _check_redis_cache(self):
+        self.stdout.write('\nRedis cache (search results)')
+        cache_url = getattr(settings, 'CACHES', {}).get('default', {}).get('LOCATION', '')
+        self._pass('cache URL', str(cache_url))
+
+        try:
+            from django.core.cache import cache
+
+            cache.set('_healthcheck', 'ok', 10)
+            if cache.get('_healthcheck') == 'ok':
+                self._pass('cache read/write')
+            else:
+                self._warn('cache read/write', 'miss — Redis DB 1 down or IGNORE_EXCEPTIONS')
+        except Exception as exc:
+            self._warn('cache read/write', str(exc))
+
     def _check_media(self):
         self.stdout.write('\nMedia storage')
+        if getattr(settings, 'USE_R2_STORAGE', False):
+            from django.core.files.storage import default_storage
+
+            bucket = getattr(settings, 'AWS_STORAGE_BUCKET_NAME', '?')
+            test_name = '.write_test'
+            try:
+                default_storage.save(test_name, ContentFile(b'ok'))
+                default_storage.delete(test_name)
+                self._pass('R2 storage writable', bucket)
+            except Exception as exc:
+                self._fail('R2 storage writable', str(exc))
+            return
+
         media_root = Path(settings.MEDIA_ROOT)
         try:
             media_root.mkdir(parents=True, exist_ok=True)

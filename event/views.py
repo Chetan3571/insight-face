@@ -45,3 +45,24 @@ def list_albums(request):
             for a in albums
         ],
     })
+
+
+def process_album(request, album_id):
+    """Queue GPU-batched embedding extraction for all photos in an album."""
+    if request.method != 'POST':
+        return JsonResponse({'error': 'POST only'}, status=405)
+
+    try:
+        album = Album.objects.get(id=album_id)
+    except Album.DoesNotExist:
+        return JsonResponse({'error': f'Album {album_id} not found'}, status=404)
+
+    from .tasks import process_album_embeddings
+
+    task = process_album_embeddings.delay(album.id)
+    return JsonResponse({
+        'album_id': album.id,
+        'task_id': task.id,
+        'status': 'processing',
+        'photo_count': album.photos.count(),
+    })

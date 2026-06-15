@@ -26,7 +26,10 @@ AUX_ONNX_ZIP_URL = (
 )
 
 MIN_FACE_PX = 40
-REC_BATCH_SIZE = 16
+
+
+def _rec_batch_size() -> int:
+    return int(os.environ.get('REC_BATCH_SIZE', '16'))
 
 
 def _adaface_pack_dir() -> str:
@@ -132,20 +135,9 @@ app = _build_face_app()
 
 
 def extract_embeddings(image_path: str) -> list:
-    """Return 512-d AdaFace embeddings for every adequately-sized face in the image."""
-    img = cv2.imread(image_path)
-    if img is None:
-        return []
-    faces = app.get(img)
-    result = []
-    for face in faces:
-        x1, y1, x2, y2 = face.bbox.astype(int)
-        if (x2 - x1) < MIN_FACE_PX or (y2 - y1) < MIN_FACE_PX:
-            continue
-        if face.embedding is None:
-            continue
-        result.append(face.embedding)
-    return result
+    """Return 512-d AdaFace embeddings (uses GPU-batched recognition path)."""
+    results = extract_embeddings_batch([image_path])
+    return results[0] if results else []
 
 
 def extract_embeddings_batch(image_paths: list) -> list:
@@ -183,9 +175,10 @@ def extract_embeddings_batch(image_paths: list) -> list:
     if not all_crops:
         return [[] for _ in image_paths]
 
+    batch_size = _rec_batch_size()
     all_embeddings = []
-    for i in range(0, len(all_crops), REC_BATCH_SIZE):
-        batch = all_crops[i:i + REC_BATCH_SIZE]
+    for i in range(0, len(all_crops), batch_size):
+        batch = all_crops[i:i + batch_size]
         embs = rec_model.get_feat(batch)
         all_embeddings.extend(embs)
 
