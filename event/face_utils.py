@@ -8,13 +8,14 @@ import cv2
 import gdown
 import insightface
 import numpy as np
+import onnxruntime
 from insightface.model_zoo.arcface_onnx import ArcFaceONNX
 from insightface.utils import face_align as _face_align
 
 logger = logging.getLogger('event')
 
 MODEL_PACK = 'adaface'
-RECOG_ONNX = 'adaface_ir101_webface12m.onnx'
+RECOG_ONNX = os.environ.get('ADAFACE_MODEL_FILENAME', 'adaface_ir101_webface12m.onnx')
 RECOG_GDRIVE_ID = '1dgMFOASKnaujQcCL4sSYkKOkBrmXUUU1'
 # SCRFD detector + 106-point landmarks (InsightFace ONNX helpers for the AdaFace pipeline)
 DET_ONNX = 'det_10g.onnx'
@@ -114,6 +115,56 @@ def _load_adaface_recognition(pack_dir: str, ctx_id: int) -> ArcFaceONNX:
     return recog_model
 
 
+def _make_session_opts(save_cache_as: str = '') -> onnxruntime.SessionOptions:
+    opts = onnxruntime.SessionOptions()
+    opts.intra_op_num_threads = int(os.environ.get('ORT_INTRA_THREADS', '0'))
+    opts.inter_op_num_threads = int(os.environ.get('ORT_INTER_THREADS', '1'))
+    opts.graph_optimization_level = onnxruntime.GraphOptimizationLevel.ORT_ENABLE_ALL
+    cache_dir = os.environ.get('ORT_OPTIMIZED_MODEL_DIR', '')
+    if cache_dir and save_cache_as:
+        os.makedirs(cache_dir, exist_ok=True)
+        opts.optimized_model_filepath = os.path.join(cache_dir, save_cache_as)
+    return opts
+
+
+def _apply_session_opts(
+    model_obj, sess_options: onnxruntime.SessionOptions, cache_name: str = ''
+) -> None:
+    """Rebuild model's InferenceSession with custom SessionOptions.
+
+    On first run with ORT_OPTIMIZED_MODEL_DIR set, saves the optimized graph so
+    subsequent startups load the pre-optimized model and skip the optimization phase.
+    """
+    old_session = model_obj.session
+    providers = old_session.get_providers()
+    provider_options = old_session.get_provider_options()
+    po_list = [provider_options.get(p, {}) for p in providers]
+
+    model_path = model_obj.model_file
+    cache_dir = os.environ.get('ORT_OPTIMIZED_MODEL_DIR', '')
+    if cache_dir and cache_name:
+        cached = os.path.join(cache_dir, cache_name)
+        if os.path.exists(cached) and os.path.getmtime(cached) >= os.path.getmtime(model_path):
+            model_path = cached
+
+    model_obj.session = onnxruntime.InferenceSession(
+        model_path,
+        sess_options=sess_options,
+        providers=providers,
+        provider_options=po_list,
+    )
+
+
+def _warmup(face_app, recog_model) -> None:
+    """Run dummy inference to pay ONNX kernel JIT cost at worker startup, not on first task."""
+    try:
+        face_app.det_model.detect(np.zeros((640, 640, 3), dtype=np.uint8))
+        recog_model.get_feat([np.zeros((112, 112, 3), dtype=np.uint8)])
+        logger.info('ONNX warm-up completed')
+    except Exception:
+        pass
+
+
 def _build_face_app():
     """AdaFace-only pipeline: SCRFD detect → landmarks → AdaFace IR101 embeddings."""
     pack_dir = _ensure_adaface_pack()
@@ -127,6 +178,13 @@ def _build_face_app():
 
     recog_model = _load_adaface_recognition(pack_dir, ctx_id)
     face_app.models['recognition'] = recog_model
+
+    det_opts = _make_session_opts('det_10g_opt.onnx')
+    rec_opts = _make_session_opts('adaface_opt.onnx')
+    _apply_session_opts(face_app.det_model, det_opts, 'det_10g_opt.onnx')
+    _apply_session_opts(recog_model, rec_opts, 'adaface_opt.onnx')
+
+    _warmup(face_app, recog_model)
     logger.info('AdaFace pipeline ready (ctx_id=%s)', ctx_id)
     return face_app
 
