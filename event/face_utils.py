@@ -15,7 +15,8 @@ from insightface.utils import face_align as _face_align
 logger = logging.getLogger('event')
 
 MODEL_PACK = 'adaface'
-RECOG_ONNX = os.environ.get('ADAFACE_MODEL_FILENAME', 'adaface_ir101_webface12m.onnx')
+FP32_ONNX = 'adaface_ir101_webface12m.onnx'          # canonical download name (always fetched)
+RECOG_ONNX = os.environ.get('ADAFACE_MODEL_FILENAME', FP32_ONNX)   # active model (FP32 or INT8)
 RECOG_GDRIVE_ID = '1dgMFOASKnaujQcCL4sSYkKOkBrmXUUU1'
 # SCRFD detector + 106-point landmarks (InsightFace ONNX helpers for the AdaFace pipeline)
 DET_ONNX = 'det_10g.onnx'
@@ -65,13 +66,15 @@ def _download_aux_onnx(pack_dir: str) -> None:
 
 
 def _download_adaface_recognition(pack_dir: str) -> None:
-    recog_path = os.path.join(pack_dir, RECOG_ONNX)
-    if _onnx_ready(recog_path, min_bytes=1_000_000):
+    # Always download the FP32 model — the INT8 variant is generated locally via
+    # scripts/quantize_adaface.py and must never be fetched from Google Drive.
+    fp32_path = os.path.join(pack_dir, FP32_ONNX)
+    if _onnx_ready(fp32_path, min_bytes=1_000_000):
         return
-    logger.info('Downloading AdaFace recognition model to %s', recog_path)
+    logger.info('Downloading AdaFace recognition model to %s', fp32_path)
     gdown.download(
         f'https://drive.google.com/uc?id={RECOG_GDRIVE_ID}',
-        recog_path,
+        fp32_path,
         quiet=False,
     )
 
@@ -106,7 +109,12 @@ def _patch_adaface_recognition(recog_model: ArcFaceONNX) -> None:
 
 def _load_adaface_recognition(pack_dir: str, ctx_id: int) -> ArcFaceONNX:
     recog_path = os.path.join(pack_dir, RECOG_ONNX)
-    if not _onnx_ready(recog_path, min_bytes=1_000_000):
+    if not _onnx_ready(recog_path, min_bytes=100_000):
+        if RECOG_ONNX != FP32_ONNX:
+            raise FileNotFoundError(
+                f'Configured model not found: {recog_path}\n'
+                f'Generate it first:  python scripts/quantize_adaface.py'
+            )
         raise FileNotFoundError(f'AdaFace model not found: {recog_path}')
 
     recog_model = ArcFaceONNX(recog_path)
@@ -179,10 +187,11 @@ def _build_face_app():
     recog_model = _load_adaface_recognition(pack_dir, ctx_id)
     face_app.models['recognition'] = recog_model
 
+    rec_cache = os.path.splitext(RECOG_ONNX)[0] + '_opt.onnx'
     det_opts = _make_session_opts('det_10g_opt.onnx')
-    rec_opts = _make_session_opts('adaface_opt.onnx')
+    rec_opts = _make_session_opts(rec_cache)
     _apply_session_opts(face_app.det_model, det_opts, 'det_10g_opt.onnx')
-    _apply_session_opts(recog_model, rec_opts, 'adaface_opt.onnx')
+    _apply_session_opts(recog_model, rec_opts, rec_cache)
 
     _warmup(face_app, recog_model)
     logger.info('AdaFace pipeline ready (ctx_id=%s)', ctx_id)
