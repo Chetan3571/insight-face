@@ -217,6 +217,17 @@ FILE_UPLOAD_MAX_MEMORY_SIZE = 104857600  # 100 MB
 
 DATA_UPLOAD_MAX_NUMBER_FILES = 1000
 
+# ── RunPod serverless GPU ──────────────────────────────────────────────────
+USE_RUNPOD = _env_bool('USE_RUNPOD', default=False)
+RUNPOD_API_KEY = _env('RUNPOD_API_KEY', '')
+RUNPOD_ENDPOINT_ID = _env('RUNPOD_ENDPOINT_ID', '')
+RUNPOD_TIMEOUT = int(_env('RUNPOD_TIMEOUT', '120'))
+
+if USE_RUNPOD and not RUNPOD_API_KEY:
+    raise ImproperlyConfigured('USE_RUNPOD=True requires RUNPOD_API_KEY')
+if USE_RUNPOD and not RUNPOD_ENDPOINT_ID:
+    raise ImproperlyConfigured('USE_RUNPOD=True requires RUNPOD_ENDPOINT_ID')
+
 CELERY_BROKER_URL = _env('CELERY_BROKER_URL', 'redis://localhost:6379/0')
 CELERY_RESULT_BACKEND = 'django-db'
 CELERY_ACCEPT_CONTENT = ['json']
