@@ -198,7 +198,14 @@ def _build_face_app():
     return face_app
 
 
-app = _build_face_app()
+_app = None
+
+
+def _get_app():
+    global _app
+    if _app is None:
+        _app = _build_face_app()
+    return _app
 
 
 def extract_embeddings(image_path: str) -> list:
@@ -214,7 +221,8 @@ def extract_embeddings_batch(image_paths: list) -> list:
     Detection runs per-image; recognition is batched across REC_BATCH_SIZE crops.
     Returns one inner list of embeddings per input path (same order).
     """
-    rec_model = app.models.get('recognition')
+    face_app = _get_app()
+    rec_model = face_app.models.get('recognition')
     if rec_model is None:
         return [extract_embeddings(p) for p in image_paths]
 
@@ -228,7 +236,7 @@ def extract_embeddings_batch(image_paths: list) -> list:
         span_start = len(all_crops)
 
         if img is not None:
-            bboxes, kpss = app.det_model.detect(img, max_num=0, metric='default')
+            bboxes, kpss = face_app.det_model.detect(img, max_num=0, metric='default')
             if bboxes.shape[0] > 0 and kpss is not None:
                 for i in range(bboxes.shape[0]):
                     x1, y1, x2, y2 = bboxes[i, :4].astype(int)
@@ -250,6 +258,71 @@ def extract_embeddings_batch(image_paths: list) -> list:
         all_embeddings.extend(embs)
 
     return [all_embeddings[start:end] for start, end in image_face_spans]
+
+
+def _call_runpod(images_payload: list) -> list:
+    """Shared HTTP call to RunPod /runsync endpoint."""
+    import requests as req_lib
+    from django.conf import settings
+
+    url = f'https://api.runpod.ai/v2/{settings.RUNPOD_ENDPOINT_ID}/runsync'
+    headers = {
+        'Authorization': f'Bearer {settings.RUNPOD_API_KEY}',
+        'Content-Type': 'application/json',
+    }
+    payload = {'input': {'images': images_payload}}
+
+    try:
+        resp = req_lib.post(url, headers=headers, json=payload, timeout=settings.RUNPOD_TIMEOUT)
+        resp.raise_for_status()
+    except req_lib.exceptions.Timeout:
+        logger.error('RunPod request timed out after %ss', settings.RUNPOD_TIMEOUT)
+        raise
+    except req_lib.exceptions.RequestException as exc:
+        logger.error('RunPod HTTP error: %s', exc)
+        raise
+
+    data = resp.json()
+    if data.get('status') != 'COMPLETED':
+        error_msg = data.get('error', 'unknown RunPod error')
+        logger.error('RunPod job not completed: status=%s error=%s', data.get('status'), error_msg)
+        raise RuntimeError(f'RunPod inference failed: {error_msg}')
+
+    output = data.get('output', {})
+    return output.get('embeddings', [[] for _ in images_payload])
+
+
+def extract_embeddings_runpod_urls(image_urls: list) -> list:
+    """
+    Dispatch inference to RunPod GPU using public image URLs (e.g. Cloudflare R2).
+
+    The RunPod container fetches images directly from the URLs — no download
+    to the Celery worker. Use this when USE_R2_STORAGE=True.
+
+    Returns same format as extract_embeddings_batch().
+    """
+    logger.info('RunPod inference (URLs) for %d images', len(image_urls))
+    return _call_runpod([{'url': u} for u in image_urls])
+
+
+def extract_embeddings_runpod(image_paths: list) -> list:
+    """
+    Dispatch inference to RunPod GPU by base64-encoding local image files.
+
+    Fallback for local dev when USE_R2_STORAGE=False and there are no public URLs.
+
+    Returns same format as extract_embeddings_batch().
+    """
+    import base64
+
+    images_payload = []
+    for path in image_paths:
+        with open(path, 'rb') as f:
+            b64 = base64.b64encode(f.read()).decode('ascii')
+        images_payload.append({'b64': b64})
+
+    logger.info('RunPod inference (base64) for %d images', len(image_paths))
+    return _call_runpod(images_payload)
 
 
 def find_similar(query_embedding, event_id=None, threshold=0.45, limit=50):

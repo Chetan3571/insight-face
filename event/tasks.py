@@ -27,8 +27,6 @@ def _save_photo_embeddings(photo, embeddings) -> int:
 @shared_task(bind=True, max_retries=3, default_retry_delay=5)
 def process_photo_embeddings(self, photo_id):
     """Extract face embeddings for a single photo and store them via pgvector."""
-    from .face_utils import extract_embeddings_batch
-
     try:
         photo = Photo.objects.get(id=photo_id)
     except Photo.DoesNotExist:
@@ -36,10 +34,20 @@ def process_photo_embeddings(self, photo_id):
         return {'photo_id': photo_id, 'error': 'photo not found'}
 
     try:
-        from .storage_utils import local_image_paths
+        if settings.USE_RUNPOD:
+            from .face_utils import extract_embeddings_runpod, extract_embeddings_runpod_urls
+            if settings.USE_R2_STORAGE:
+                batch = extract_embeddings_runpod_urls([photo.image.url])
+            else:
+                from .storage_utils import local_image_paths
+                with local_image_paths([photo.image]) as paths:
+                    batch = extract_embeddings_runpod(paths)
+        else:
+            from .face_utils import extract_embeddings_batch
+            from .storage_utils import local_image_paths
+            with local_image_paths([photo.image]) as paths:
+                batch = extract_embeddings_batch(paths)
 
-        with local_image_paths([photo.image]) as paths:
-            batch = extract_embeddings_batch(paths)
         embeddings = batch[0] if batch else []
         faces_found = _save_photo_embeddings(photo, embeddings)
         invalidate_search_cache()
@@ -64,7 +72,6 @@ def process_album_embeddings(album_id):
     ONNX forward pass (REC_BATCH_SIZE crops at a time).  Falls back to
     per-photo Celery tasks for any chunk that raises.
     """
-    from .face_utils import extract_embeddings_batch
     from .models import Album
 
     photos = list(Album.objects.get(id=album_id).photos.all())
@@ -73,19 +80,30 @@ def process_album_embeddings(album_id):
 
     for i in range(0, len(photos), batch_size):
         chunk = photos[i:i + batch_size]
-        from .storage_utils import local_image_paths
-
-        with local_image_paths([p.image for p in chunk]) as paths:
-            try:
-                batch_results = extract_embeddings_batch(paths)
-            except Exception:
-                logger.exception(
-                    'Batch failed for album %s chunk at index %s — falling back to per-photo tasks',
-                    album_id, i,
-                )
-                for p in chunk:
-                    process_photo_embeddings.delay(p.id)
-                continue
+        try:
+            if settings.USE_RUNPOD:
+                from .face_utils import extract_embeddings_runpod, extract_embeddings_runpod_urls
+                if settings.USE_R2_STORAGE:
+                    batch_results = extract_embeddings_runpod_urls(
+                        [p.image.url for p in chunk]
+                    )
+                else:
+                    from .storage_utils import local_image_paths
+                    with local_image_paths([p.image for p in chunk]) as paths:
+                        batch_results = extract_embeddings_runpod(paths)
+            else:
+                from .face_utils import extract_embeddings_batch
+                from .storage_utils import local_image_paths
+                with local_image_paths([p.image for p in chunk]) as paths:
+                    batch_results = extract_embeddings_batch(paths)
+        except Exception:
+            logger.exception(
+                'Batch failed for album %s chunk at index %s — falling back to per-photo tasks',
+                album_id, i,
+            )
+            for p in chunk:
+                process_photo_embeddings.delay(p.id)
+            continue
 
         for photo, embeddings in zip(chunk, batch_results):
             _save_photo_embeddings(photo, embeddings)
