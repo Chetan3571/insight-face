@@ -24,6 +24,16 @@ def _save_photo_embeddings(photo, embeddings) -> int:
     return len(embeddings)
 
 
+def _validate_batch_results(batch_results, expected_count: int, source: str) -> list:
+    if not isinstance(batch_results, list):
+        raise RuntimeError(f'{source} returned {type(batch_results).__name__}, expected list')
+    if len(batch_results) != expected_count:
+        raise RuntimeError(
+            f'{source} returned {len(batch_results)} result(s) for {expected_count} photo(s)'
+        )
+    return batch_results
+
+
 @shared_task(bind=True, max_retries=3, default_retry_delay=5)
 def process_photo_embeddings(self, photo_id):
     """Extract face embeddings for a single photo and store them via pgvector."""
@@ -48,6 +58,7 @@ def process_photo_embeddings(self, photo_id):
             with local_image_paths([photo.image]) as paths:
                 batch = extract_embeddings_batch(paths)
 
+        batch = _validate_batch_results(batch, 1, 'embedding extraction')
         embeddings = batch[0] if batch else []
         faces_found = _save_photo_embeddings(photo, embeddings)
         invalidate_search_cache()
@@ -98,13 +109,18 @@ def process_album_embeddings(album_id):
                     batch_results = extract_embeddings_batch(paths)
         except Exception:
             logger.exception(
-                'Batch failed for album %s chunk at index %s — falling back to per-photo tasks',
+                'Batch failed for album %s chunk at index %s; falling back to per-photo tasks',
                 album_id, i,
             )
             for p in chunk:
                 process_photo_embeddings.delay(p.id)
             continue
 
+        batch_results = _validate_batch_results(
+            batch_results,
+            len(chunk),
+            'album embedding extraction',
+        )
         for photo, embeddings in zip(chunk, batch_results):
             _save_photo_embeddings(photo, embeddings)
             processed += 1
