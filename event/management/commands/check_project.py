@@ -324,9 +324,17 @@ class Command(BaseCommand):
                 self._warn(name, 'will download on first Celery task')
 
         try:
+            import onnxruntime
             from event import face_utils
-            recog = face_utils.app.models.get('recognition')
+
+            self._pass('onnxruntime providers', ', '.join(onnxruntime.get_available_providers()))
+            app = face_utils._get_app()
+            recog = app.models.get('recognition')
             model_name = getattr(recog, 'model_file', 'unknown')
-            self._pass('face_utils import', f'recognition: {model_name}')
+            providers = app.det_model.session.get_providers()
+            self._pass(
+                'face_utils import',
+                f'recognition: {model_name}; active providers: {providers}',
+            )
         except Exception as exc:
             self._fail('face_utils import', str(exc))

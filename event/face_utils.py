@@ -30,8 +30,34 @@ AUX_ONNX_ZIP_URL = (
 MIN_FACE_PX = 40
 
 
+def _min_face_px() -> int:
+    return int(os.environ.get('MIN_FACE_PX', str(MIN_FACE_PX)))
+
+
 def _rec_batch_size() -> int:
     return int(os.environ.get('REC_BATCH_SIZE', '16'))
+
+
+def _execution_provider_config(ctx_id: int) -> tuple[list[str], list[dict]]:
+    available = onnxruntime.get_available_providers()
+    if ctx_id >= 0:
+        if 'CUDAExecutionProvider' not in available:
+            raise RuntimeError(
+                'INSIGHTFACE_CTX_ID is set to GPU, but ONNX Runtime CUDA is not available. '
+                f'Available providers: {available}. Install onnxruntime-gpu in the worker '
+                'environment or set INSIGHTFACE_CTX_ID=-1.'
+            )
+        return (
+            ['CUDAExecutionProvider', 'CPUExecutionProvider'],
+            [{'device_id': ctx_id}, {}],
+        )
+    return (['CPUExecutionProvider'], [{}])
+
+
+def _provider_cache_name(base_name: str, ctx_id: int) -> str:
+    stem, ext = os.path.splitext(base_name)
+    provider = 'cuda' if ctx_id >= 0 else 'cpu'
+    return f'{stem}_{provider}{ext}'
 
 
 def _adaface_pack_dir() -> str:
@@ -107,7 +133,12 @@ def _patch_adaface_recognition(recog_model: ArcFaceONNX) -> None:
     recog_model.get_feat = get_feat
 
 
-def _load_adaface_recognition(pack_dir: str, ctx_id: int) -> ArcFaceONNX:
+def _load_adaface_recognition(
+    pack_dir: str,
+    ctx_id: int,
+    providers: list[str],
+    provider_options: list[dict],
+) -> ArcFaceONNX:
     recog_path = os.path.join(pack_dir, RECOG_ONNX)
     if not _onnx_ready(recog_path, min_bytes=100_000):
         if RECOG_ONNX != FP32_ONNX:
@@ -117,7 +148,12 @@ def _load_adaface_recognition(pack_dir: str, ctx_id: int) -> ArcFaceONNX:
             )
         raise FileNotFoundError(f'AdaFace model not found: {recog_path}')
 
-    recog_model = ArcFaceONNX(recog_path)
+    session = onnxruntime.InferenceSession(
+        recog_path,
+        providers=providers,
+        provider_options=provider_options,
+    )
+    recog_model = ArcFaceONNX(recog_path, session=session)
     _patch_adaface_recognition(recog_model)
     recog_model.prepare(ctx_id)
     return recog_model
@@ -150,10 +186,15 @@ def _apply_session_opts(
 
     model_path = model_obj.model_file
     cache_dir = os.environ.get('ORT_OPTIMIZED_MODEL_DIR', '')
+    using_cached_model = False
     if cache_dir and cache_name:
         cached = os.path.join(cache_dir, cache_name)
         if os.path.exists(cached) and os.path.getmtime(cached) >= os.path.getmtime(model_path):
             model_path = cached
+            using_cached_model = True
+
+    if using_cached_model:
+        sess_options.optimized_model_filepath = ''
 
     model_obj.session = onnxruntime.InferenceSession(
         model_path,
@@ -177,24 +218,39 @@ def _build_face_app():
     """AdaFace-only pipeline: SCRFD detect → landmarks → AdaFace IR101 embeddings."""
     pack_dir = _ensure_adaface_pack()
     ctx_id = int(os.environ.get('INSIGHTFACE_CTX_ID', '-1'))
+    providers, provider_options = _execution_provider_config(ctx_id)
 
     face_app = insightface.app.FaceAnalysis(
         name=MODEL_PACK,
         allowed_modules=['detection', 'landmark_2d_106'],
+        providers=providers,
+        provider_options=provider_options,
     )
-    face_app.prepare(ctx_id=ctx_id)
+    det_thresh = float(os.environ.get('DET_THRESH', '0.5'))
+    det_size_raw = os.environ.get('DET_SIZE', '640,640')
+    det_size_parts = [int(part.strip()) for part in det_size_raw.split(',') if part.strip()]
+    if len(det_size_parts) != 2:
+        raise ValueError('DET_SIZE must be formatted as width,height, for example 640,640')
+    face_app.prepare(ctx_id=ctx_id, det_thresh=det_thresh, det_size=tuple(det_size_parts))
 
-    recog_model = _load_adaface_recognition(pack_dir, ctx_id)
+    recog_model = _load_adaface_recognition(pack_dir, ctx_id, providers, provider_options)
     face_app.models['recognition'] = recog_model
 
-    rec_cache = os.path.splitext(RECOG_ONNX)[0] + '_opt.onnx'
-    det_opts = _make_session_opts('det_10g_opt.onnx')
+    rec_cache = _provider_cache_name(os.path.splitext(RECOG_ONNX)[0] + '_opt.onnx', ctx_id)
+    det_cache = _provider_cache_name('det_10g_opt.onnx', ctx_id)
+    det_opts = _make_session_opts(det_cache)
     rec_opts = _make_session_opts(rec_cache)
-    _apply_session_opts(face_app.det_model, det_opts, 'det_10g_opt.onnx')
+    _apply_session_opts(face_app.det_model, det_opts, det_cache)
     _apply_session_opts(recog_model, rec_opts, rec_cache)
 
     _warmup(face_app, recog_model)
-    logger.info('AdaFace pipeline ready (ctx_id=%s)', ctx_id)
+    logger.info(
+        'AdaFace pipeline ready (ctx_id=%s, providers=%s, det_thresh=%s, det_size=%s)',
+        ctx_id,
+        face_app.det_model.session.get_providers(),
+        det_thresh,
+        tuple(det_size_parts),
+    )
     return face_app
 
 
@@ -231,19 +287,34 @@ def extract_embeddings_batch(image_paths: list) -> list:
     all_crops = []
     image_face_spans = []
 
+    min_face_px = _min_face_px()
+
     for path in image_paths:
         img = cv2.imread(path)
         span_start = len(all_crops)
 
         if img is not None:
             bboxes, kpss = face_app.det_model.detect(img, max_num=0, metric='default')
+            detected = int(bboxes.shape[0])
+            kept = 0
             if bboxes.shape[0] > 0 and kpss is not None:
                 for i in range(bboxes.shape[0]):
                     x1, y1, x2, y2 = bboxes[i, :4].astype(int)
-                    if (x2 - x1) < MIN_FACE_PX or (y2 - y1) < MIN_FACE_PX:
+                    if (x2 - x1) < min_face_px or (y2 - y1) < min_face_px:
                         continue
                     crop = _face_align.norm_crop(img, landmark=kpss[i], image_size=image_size)
                     all_crops.append(crop)
+                    kept += 1
+            logger.info(
+                'Face detection path=%s decoded=%s detected=%d kept=%d min_face_px=%d',
+                path,
+                img.shape[:2],
+                detected,
+                kept,
+                min_face_px,
+            )
+        else:
+            logger.warning('OpenCV could not decode image path=%s', path)
 
         image_face_spans.append((span_start, len(all_crops)))
 
@@ -258,6 +329,34 @@ def extract_embeddings_batch(image_paths: list) -> list:
         all_embeddings.extend(embs)
 
     return [all_embeddings[start:end] for start, end in image_face_spans]
+
+
+def _normalize_embedding_results(output, expected_count: int) -> list:
+    if isinstance(output, list):
+        results = output
+    elif isinstance(output, dict):
+        if 'embeddings' in output:
+            results = output['embeddings']
+        elif 'results' in output:
+            raw_results = output['results']
+            if not isinstance(raw_results, list):
+                raise RuntimeError('RunPod output.results must be a list')
+            results = [
+                item.get('embeddings', item.get('faces', [])) if isinstance(item, dict) else item
+                for item in raw_results
+            ]
+        else:
+            results = [[] for _ in range(expected_count)]
+    else:
+        raise RuntimeError(f'Unexpected RunPod output type: {type(output).__name__}')
+
+    if not isinstance(results, list):
+        raise RuntimeError('RunPod embeddings output must be a list')
+    if len(results) != expected_count:
+        raise RuntimeError(
+            f'RunPod returned {len(results)} result(s) for {expected_count} image(s)'
+        )
+    return results
 
 
 def _call_runpod(images_payload: list) -> list:
@@ -289,7 +388,9 @@ def _call_runpod(images_payload: list) -> list:
         raise RuntimeError(f'RunPod inference failed: {error_msg}')
 
     output = data.get('output', {})
-    return output.get('embeddings', [[] for _ in images_payload])
+    results = _normalize_embedding_results(output, len(images_payload))
+    logger.info('RunPod face counts: %s', [len(item) for item in results])
+    return results
 
 
 def extract_embeddings_runpod_urls(image_urls: list) -> list:
