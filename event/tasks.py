@@ -59,6 +59,7 @@ def process_photo_embeddings(self, photo_id):
                 batch = extract_embeddings_batch(paths)
 
         batch = _validate_batch_results(batch, 1, 'embedding extraction')
+        logger.info("here is the batch data",batch)
         embeddings = batch[0] if batch else []
         faces_found = _save_photo_embeddings(photo, embeddings)
         invalidate_search_cache()

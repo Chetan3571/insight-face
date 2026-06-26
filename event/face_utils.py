@@ -382,6 +382,7 @@ def _call_runpod(images_payload: list) -> list:
         raise
 
     data = resp.json()
+    logger.info("here is the whole data",data)
     if data.get('status') != 'COMPLETED':
         error_msg = data.get('error', 'unknown RunPod error')
         logger.error('RunPod job not completed: status=%s error=%s', data.get('status'), error_msg)
@@ -389,6 +390,8 @@ def _call_runpod(images_payload: list) -> list:
 
     output = data.get('output', {})
     results = _normalize_embedding_results(output, len(images_payload))
+    logger.info('here is the result', results)
+    logger.info("here is the output",output)
     logger.info('RunPod face counts: %s', [len(item) for item in results])
     return results
 
