@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import tempfile
@@ -331,6 +332,95 @@ def extract_embeddings_batch(image_paths: list) -> list:
     return [all_embeddings[start:end] for start, end in image_face_spans]
 
 
+def _summarize_embedding_vector(vec) -> dict:
+    if vec is None:
+        return {'dims': 0}
+    if hasattr(vec, 'tolist'):
+        vec = vec.tolist()
+    if not isinstance(vec, (list, tuple)):
+        return {'type': type(vec).__name__, 'value': repr(vec)[:120]}
+    if not vec:
+        return {'dims': 0}
+    floats = [float(x) for x in vec]
+    return {
+        'dims': len(floats),
+        'head': [round(x, 6) for x in floats[:4]],
+        'tail': [round(x, 6) for x in floats[-2:]],
+    }
+
+
+def summarize_embedding_batch(batch) -> dict:
+    """Compact log-friendly view of per-image embedding lists."""
+    if not isinstance(batch, list):
+        return {'type': type(batch).__name__, 'value': repr(batch)[:200]}
+    return {
+        'image_count': len(batch),
+        'face_counts': [len(img) if isinstance(img, list) else None for img in batch],
+        'faces': [
+            [_summarize_embedding_vector(face) for face in img]
+            if isinstance(img, list) else repr(img)[:120]
+            for img in batch
+        ],
+    }
+
+
+def _summarize_runpod_output(output) -> dict:
+    if isinstance(output, list):
+        return {
+            'format': 'list',
+            'image_count': len(output),
+            'face_counts': [len(item) if isinstance(item, list) else None for item in output],
+            'faces': [
+                [_summarize_embedding_vector(face) for face in item]
+                if isinstance(item, list) else repr(item)[:120]
+                for item in output
+            ],
+        }
+    if isinstance(output, dict):
+        summary = {'format': 'dict', 'keys': list(output.keys())}
+        if 'embeddings' in output:
+            summary['embeddings'] = _summarize_runpod_output(output['embeddings'])
+        if 'results' in output and isinstance(output['results'], list):
+            summary['results'] = []
+            for item in output['results']:
+                if not isinstance(item, dict):
+                    summary['results'].append(_summarize_runpod_output(item))
+                    continue
+                entry = {
+                    k: v for k, v in item.items()
+                    if k not in ('embeddings', 'faces')
+                }
+                if 'embeddings' in item:
+                    entry['embeddings'] = _summarize_runpod_output(item['embeddings'])
+                if 'faces' in item and isinstance(item['faces'], list):
+                    entry['faces'] = []
+                    for face in item['faces']:
+                        if not isinstance(face, dict):
+                            entry['faces'].append(repr(face)[:120])
+                            continue
+                        face_entry = {k: v for k, v in face.items() if k != 'embedding'}
+                        if 'embedding' in face:
+                            face_entry['embedding'] = _summarize_embedding_vector(face['embedding'])
+                        entry['faces'].append(face_entry)
+                summary['results'].append(entry)
+        return summary
+    return {'format': type(output).__name__, 'value': repr(output)[:200]}
+
+
+def _summarize_runpod_response(data) -> dict:
+    if not isinstance(data, dict):
+        return {'value': repr(data)[:200]}
+    return {
+        'id': data.get('id'),
+        'status': data.get('status'),
+        'delayTime': data.get('delayTime'),
+        'executionTime': data.get('executionTime'),
+        'workerId': data.get('workerId'),
+        'error': data.get('error'),
+        'output': _summarize_runpod_output(data.get('output')),
+    }
+
+
 def _normalize_embedding_results(output, expected_count: int) -> list:
     if isinstance(output, list):
         results = output
@@ -382,7 +472,7 @@ def _call_runpod(images_payload: list) -> list:
         raise
 
     data = resp.json()
-    logger.info("here is the whole data",data)
+    logger.info('RunPod response: %s', json.dumps(_summarize_runpod_response(data), default=str))
     if data.get('status') != 'COMPLETED':
         error_msg = data.get('error', 'unknown RunPod error')
         logger.error('RunPod job not completed: status=%s error=%s', data.get('status'), error_msg)
@@ -390,8 +480,10 @@ def _call_runpod(images_payload: list) -> list:
 
     output = data.get('output', {})
     results = _normalize_embedding_results(output, len(images_payload))
-    logger.info('here is the result', results)
-    logger.info("here is the output",output)
+    logger.info(
+        'RunPod normalized results: %s',
+        json.dumps(summarize_embedding_batch(results), default=str),
+    )
     logger.info('RunPod face counts: %s', [len(item) for item in results])
     return results
 

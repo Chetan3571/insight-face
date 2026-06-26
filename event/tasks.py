@@ -4,6 +4,7 @@ from celery import shared_task
 from django.conf import settings
 
 from .cache_utils import invalidate_search_cache
+from .face_utils import summarize_embedding_batch
 from .models import FaceEmbedding, Photo
 
 logger = logging.getLogger('event')
@@ -59,7 +60,7 @@ def process_photo_embeddings(self, photo_id):
                 batch = extract_embeddings_batch(paths)
 
         batch = _validate_batch_results(batch, 1, 'embedding extraction')
-        logger.info("here is the batch data",batch)
+        logger.info('Embedding batch: %s', summarize_embedding_batch(batch))
         embeddings = batch[0] if batch else []
         faces_found = _save_photo_embeddings(photo, embeddings)
         invalidate_search_cache()
