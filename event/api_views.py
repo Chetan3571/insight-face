@@ -23,6 +23,26 @@ from .tasks import process_photo_embeddings
 logger = logging.getLogger('event')
 
 
+def _extract_search_embeddings(image_path):
+    if settings.USE_RUNPOD:
+        from .face_utils import extract_embeddings_runpod
+
+        batch = extract_embeddings_runpod([image_path])
+        if not isinstance(batch, list):
+            raise RuntimeError(
+                f'RunPod search extraction returned {type(batch).__name__}, expected list'
+            )
+        if len(batch) != 1:
+            raise RuntimeError(
+                f'RunPod search extraction returned {len(batch)} result(s) for 1 image'
+            )
+        return batch[0] if batch else []
+
+    from .face_utils import extract_embeddings
+
+    return extract_embeddings(image_path)
+
+
 class UploadPhotoAPIView(APIView):
     parser_classes = [MultiPartParser, FormParser]
 
@@ -77,7 +97,7 @@ class SearchByFaceAPIView(APIView):
     parser_classes = [MultiPartParser, FormParser]
 
     def post(self, request):
-        from .face_utils import extract_embeddings, find_similar
+        from .face_utils import find_similar
 
         serializer = SearchByFaceSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -100,7 +120,7 @@ class SearchByFaceAPIView(APIView):
             tmp_path = tmp.name
 
         try:
-            embeddings = extract_embeddings(tmp_path)
+            embeddings = _extract_search_embeddings(tmp_path)
             if not embeddings:
                 return Response(
                     {'error': 'No face detected in query image'},
